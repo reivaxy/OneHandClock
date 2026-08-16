@@ -66,20 +66,17 @@ void loop(void)
   // Get current hour and minutes
   uint8_t currentHour = dateTime.getHour();
   uint8_t currentMinute = dateTime.getMinute();
-  uint8_t currentSecond = dateTime.getSecond();
   
-  // Only refresh every second
-  static uint8_t last_second = 255;
-  if (currentSecond == last_second) {
-    return;  // Skip this loop iteration if no second has passed
+  // Only refresh every 100ms
+  static unsigned long last_refresh_time = 0;
+  if (millis() - last_refresh_time < 100) {
+    return;  // Skip this loop iteration if less than 100ms have passed
   }
-  last_second = currentSecond;
+  last_refresh_time = millis();
   
   // Rotation angle reflects minutes and seconds: 6° per minute + 0.1° per second (360°/60min/60sec)
   float rotation_angle = (currentMinute * 6.0f) ;
   
-  log_i("main: Displaying hour: %d, minute: %d, second: %d, angle: %.1f", currentHour, currentMinute, currentSecond, rotation_angle);
-
   // Create small sprite for the digit
   sp.createSprite(SPRITE_SIDE, SPRITE_SIDE);
   sp.fillSprite(TFT_BLACK);
@@ -90,11 +87,16 @@ void loop(void)
     fade_start_time = millis();
   }
   
-  unsigned long elapsed = (millis() - fade_start_time) % 60000;  // 60 second cycle
-  float fade_progress = elapsed / 60000.0f;  // 0-1 over 60 seconds
+  unsigned long elapsed = (millis() - fade_start_time) % 30000;  // 30 second cycle
+  float fade_progress = elapsed / 15000.0f;  // 0-1 over 15 seconds
   
-  // Hue: start at 240° (blue), end at 0° (red)
-  float hue = 240.0f * (1.0f - fade_progress);  // 240 -> 0
+  // Clamp progress to 0-1 (first 15 sec goes 0->1, next 15 sec goes 1->0)
+  if (fade_progress > 1.0f) {
+    fade_progress = 2.0f - fade_progress;
+  }
+  
+  // Hue: start at 300° (purple), end at 0° (red)
+  float hue = 300.0f * (1.0f - fade_progress);  // 300 -> 0
   
   // HSV to RGB conversion with high saturation and brightness for light colors
   float s = 1.0f;  // Full saturation
@@ -126,6 +128,14 @@ void loop(void)
   sp.setFont(&fonts::Font7);
   sp.setTextDatum(textdatum_t::middle_center);
   sp.drawNumber(currentHour, SPRITE_SIDE / 2 + x_offsets[currentHour], SPRITE_SIDE / 2);
+  
+  // Draw date at the bottom
+  sp.setFont(&fonts::Font0);
+  char date_str[10];
+  uint8_t currentDay = dateTime.getDay();
+  uint8_t currentMonth = dateTime.getMonth();
+  sprintf(date_str, "%d/%d", currentDay, currentMonth);
+  sp.drawString(date_str, SPRITE_SIDE / 2, SPRITE_SIDE - 30);
   
   // Set pivot p,oint at sprite center
   sp.setPivot(SPRITE_SIDE / 2, SPRITE_SIDE / 2);
