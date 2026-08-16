@@ -1,0 +1,6 @@
+.pio
+.vscode
+*.code-workspace
+
+# WiFi credentials - DO NOT COMMIT
+include/wifi_config.h

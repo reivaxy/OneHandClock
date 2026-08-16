@@ -1,107 +1,100 @@
-/*
- * This ESP32 code is created by esp32io.com
- *
- * This ESP32 code is released in the public domain
- *
- * For more detail (instruction and wiring diagram), visit https://esp32io.com/tutorials/esp32-round-circular-tft-lcd-display
- */
 
-#include <DIYables_TFT_Round.h>
+#include "LGFX.h"
+#include "WiFiManager.h"
+#include "DateTime.h"
 
-#define BLACK DIYables_TFT::colorRGB(0, 0, 0)
-#define RED DIYables_TFT::colorRGB(255, 0, 0)
-#define BLUE DIYables_TFT::colorRGB(0, 0, 255)
-#define WHITE DIYables_TFT::colorRGB(255, 255, 255)
+static LGFX lcd;
+static LGFX_Sprite sprite;
+static LGFX_Sprite sp;
+static WiFiManager wifiMgr;
+static DateTime dateTime;
 
-#define PIN_RST 27 // The ESP32 pin GPIO27 connected to the RST pin of the circular TFT display
-#define PIN_DC 25 // The ESP32 pin GPIO25 connected to the DC pin of the circular TFT display
-#define PIN_CS 26 // The ESP32 pin GPIO26 connected to the CS pin of the circular TFT display
-
-DIYables_TFT_GC9A01_Round TFT_display(PIN_RST, PIN_DC, PIN_CS);
-
-int angle = 0;
-int angles[] = {10, 50, 90, 130};
-
-void setChipSelect(uint8_t val) {
-    digitalWrite(PIN_RST, val);
+inline uint16_t getBackColor(int x, int y)
+{
+  return lcd.swap565(abs((x&31)-16)<<3, 0, abs((y&31)-16)<<3);
+//return lcd.swap565(x, 0, y);
 }
 
-// Open a raw SPI transaction — must be paired with spiEnd()
-void spiBegin() {
-    SPI.beginTransaction(SPISettings(40000000, MSBFIRST, SPI_MODE0));
-    setChipSelect(0);
+void setup(void)
+{
+  lcd.init();
+
+  // lcd dimensions:
+  log_i("main: LCD initialized - width=%d, height=%d", lcd.width(), lcd.height());
+
+  // Note: WiFi connection happens in loop to avoid blocking startup
+  // WiFi connection will retry automatically if not connected
+  log_i("main: Setup complete, WiFi connection will happen in loop");
+
+  sprite.setColorDepth(lcd.getColorDepth());
+  sprite.setFont(&fonts::Font8);
+  sprite.setTextColor(TFT_WHITE);
+  sprite.setTextDatum(textdatum_t::middle_center);
+  sprite.setCursor(0,0);
+  sprite.drawNumber(3, lcd.width(), 0);
+
+  lcd.startWrite();
 }
 
-// Close a raw SPI transaction — must be paired with spiBegin()
-void spiEnd() {
-    setChipSelect(1);
-    SPI.endTransaction();
-}
+void loop(void)
+{
+  static const float SPRITE_ZOOM = 3.0f;
+  static const int SPRITE_SIDE = 120;
+  static const int x_offsets[13] = {0, -10, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10};
+  static bool wifi_connected = false;
+  static unsigned long last_wifi_attempt = 0;
+  static bool first_attempt = true;
 
-// Raw command send — must be called within spiBegin()/spiEnd()
-void writeCommand(uint8_t cmd) {
-    digitalWrite(PIN_DC, 0);
-    SPI.transfer(cmd);
-    digitalWrite(PIN_DC, 1);
-}
-
-void setRotation(uint8_t r) {
-    //Adafruit_GFX::setRotation(r);
-    spiBegin();
-    writeCommand(0x36);   
-    SPI.transfer(r);  
-    spiEnd();
-
-}
-
-void display() {
-  // Sample temperature value
-  float temperature = 26.4;
-  float humidity = 64.7;
-  TFT_display.fillScreen(BLACK);
-
-  // Display temperature with degree symbol
-  TFT_display.setTextColor(RED);
-  TFT_display.setCursor(5, 100);  // Set cursor position (x, y)
-  TFT_display.print("Temperature: ");
-  TFT_display.print(temperature, 1);  // Print temperature with 1 decimal place
-  TFT_display.print(char(247));
-  TFT_display.println("C");
-
-  // Display humidity
-  TFT_display.setTextColor(BLUE);
-  TFT_display.setCursor(30, 140);  // Set cursor position (x, y)
-  TFT_display.print("Humidity: ");
-  TFT_display.print(humidity, 1);  // Print humidity with 1 decimal place
-  TFT_display.print("%");
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println(F("Arduino TFT LCD Display - show text and number"));
-
-  TFT_display.begin();
-
-  // Set the rotation (0 to 3)
-  TFT_display.setRotation(0);  // Rotate screen 90 degrees
-  TFT_display.setTextSize(2);  // Adjust text size as needed
-
-  display();
-}
-
-
-
-
-void loop(void) {
-  static unsigned long lastUpdate = 0;
-  unsigned long currentTime = millis();
-  
-  if (currentTime - lastUpdate >= 300) {
-    angle = (angle + 1)%4;
-    Serial.printf("angle: %d\n", angle);
-    TFT_display.setRotation(angle);
-    display();
-    lastUpdate = currentTime;
+  // Try WiFi connection immediately on first loop, then every 30 seconds
+  if (!wifi_connected && (first_attempt || (millis() - last_wifi_attempt) > 30000)) {
+    first_attempt = false;
+    last_wifi_attempt = millis();
+    log_i("main: Attempting WiFi connection...");
+    if (wifiMgr.connect()) {
+      wifi_connected = true;
+      // Sync time when WiFi connects
+      log_i("main: WiFi connected, syncing NTP time");
+      dateTime.syncNTPIfNeeded();
+    } else {
+      log_w("main: WiFi connection failed, will retry in 30 seconds");
+    }
   }
+
+  float center_x = lcd.width() / 2;
+  float center_y = lcd.height() / 2;
+
+  // Get current hour and minutes
+  uint8_t currentHour = dateTime.getHour();
+  uint8_t currentMinute = dateTime.getMinute();
+  uint8_t currentSecond = dateTime.getSecond();
+  
+  // Only refresh every second
+  static uint8_t last_second = 255;
+  if (currentSecond == last_second) {
+    return;  // Skip this loop iteration if no second has passed
+  }
+  last_second = currentSecond;
+  
+  // Rotation angle reflects minutes and seconds: 6° per minute + 0.1° per second (360°/60min/60sec)
+  float rotation_angle = 135.0f + (currentMinute * 6.0f) + (currentSecond * 0.1f);
+  
+  log_v("main: Displaying hour: %d, minute: %d, second: %d, angle: %.1f", currentHour, currentMinute, currentSecond, rotation_angle);
+
+  // Create small sprite for the digit
+  sp.createSprite(SPRITE_SIDE, SPRITE_SIDE);
+  sp.fillSprite(TFT_BLACK);
+  
+  // Draw large digit with current hour centered on small sprite
+  sp.setFont(&fonts::Font7);
+  sp.setTextColor(TFT_WHITE);
+  sp.setTextDatum(textdatum_t::middle_center);
+  sp.drawNumber(currentHour, SPRITE_SIDE / 2 + x_offsets[currentHour], SPRITE_SIDE / 2);
+  
+  // Set pivot p,oint at sprite center
+  sp.setPivot(SPRITE_SIDE / 2, SPRITE_SIDE / 2);
+  
+  // Push rotated sprite to display with zoom, rotating around screen center
+  sp.pushRotateZoomWithAA(&lcd, center_x, center_y, rotation_angle, SPRITE_ZOOM, SPRITE_ZOOM, 0);
+  sp.deleteSprite();
+
 }

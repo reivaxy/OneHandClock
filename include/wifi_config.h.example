@@ -1,0 +1,8 @@
+#pragma once
+
+// WiFi Configuration
+// Copy this file to wifi_config.h and fill in your credentials
+// wifi_config.h should NOT be committed to version control
+
+#define WIFI_SSID "your_ssid_here"
+#define WIFI_PASSWORD "your_password_here"
