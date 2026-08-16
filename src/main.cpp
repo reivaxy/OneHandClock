@@ -40,7 +40,7 @@ void loop(void)
 {
   static const float SPRITE_ZOOM = 3.0f;
   static const int SPRITE_SIDE = 120;
-  static const int x_offsets[13] = {0, -10, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10};
+  static const int x_offsets[24] = {0, -10, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0, 0, 0};
   static bool wifi_connected = false;
   static unsigned long last_wifi_attempt = 0;
   static bool first_attempt = true;
@@ -76,17 +76,54 @@ void loop(void)
   last_second = currentSecond;
   
   // Rotation angle reflects minutes and seconds: 6° per minute + 0.1° per second (360°/60min/60sec)
-  float rotation_angle = 135.0f + (currentMinute * 6.0f) + (currentSecond * 0.1f);
+  float rotation_angle = (currentMinute * 6.0f) ;
   
-  log_v("main: Displaying hour: %d, minute: %d, second: %d, angle: %.1f", currentHour, currentMinute, currentSecond, rotation_angle);
+  log_i("main: Displaying hour: %d, minute: %d, second: %d, angle: %.1f", currentHour, currentMinute, currentSecond, rotation_angle);
 
   // Create small sprite for the digit
   sp.createSprite(SPRITE_SIDE, SPRITE_SIDE);
   sp.fillSprite(TFT_BLACK);
   
+  // Calculate color fade: light blue to light red through rainbow in 30 seconds, then back
+  static unsigned long fade_start_time = 0;
+  if (fade_start_time == 0) {
+    fade_start_time = millis();
+  }
+  
+  unsigned long elapsed = (millis() - fade_start_time) % 60000;  // 60 second cycle
+  float fade_progress = elapsed / 60000.0f;  // 0-1 over 60 seconds
+  
+  // Hue: start at 240° (blue), end at 0° (red)
+  float hue = 240.0f * (1.0f - fade_progress);  // 240 -> 0
+  
+  // HSV to RGB conversion with high saturation and brightness for light colors
+  float s = 1.0f;  // Full saturation
+  float v = 1.0f;  // Full brightness (255)
+  
+  float h_prime = hue / 60.0f;
+  int i = (int)h_prime;
+  float f = h_prime - i;
+  
+  float p = v * (1.0f - s);
+  float q = v * (1.0f - f * s);
+  float t = v * (1.0f - (1.0f - f) * s);
+  
+  float r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    default: r = v; g = p; b = q; break;
+  }
+  
+  uint16_t fade_color = lcd.color565((uint8_t)(r * 255), (uint8_t)(g * 255), (uint8_t)(b * 255));
+  
+  sp.setTextColor(fade_color);
+  
   // Draw large digit with current hour centered on small sprite
   sp.setFont(&fonts::Font7);
-  sp.setTextColor(TFT_WHITE);
   sp.setTextDatum(textdatum_t::middle_center);
   sp.drawNumber(currentHour, SPRITE_SIDE / 2 + x_offsets[currentHour], SPRITE_SIDE / 2);
   
@@ -94,7 +131,7 @@ void loop(void)
   sp.setPivot(SPRITE_SIDE / 2, SPRITE_SIDE / 2);
   
   // Push rotated sprite to display with zoom, rotating around screen center
-  sp.pushRotateZoomWithAA(&lcd, center_x, center_y, rotation_angle, SPRITE_ZOOM, SPRITE_ZOOM, 0);
+  sp.pushRotateZoomWithAA(&lcd, center_x, center_y, -rotation_angle, SPRITE_ZOOM, SPRITE_ZOOM, 0);
   sp.deleteSprite();
 
 }
