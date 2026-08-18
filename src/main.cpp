@@ -1,107 +1,197 @@
-/*
- * This ESP32 code is created by esp32io.com
- *
- * This ESP32 code is released in the public domain
- *
- * For more detail (instruction and wiring diagram), visit https://esp32io.com/tutorials/esp32-round-circular-tft-lcd-display
- */
 
-#include <DIYables_TFT_Round.h>
+#include "LGFX.h"
+#include "WiFiManager.h"
+#include "DateTime.h"
 
-#define BLACK DIYables_TFT::colorRGB(0, 0, 0)
-#define RED DIYables_TFT::colorRGB(255, 0, 0)
-#define BLUE DIYables_TFT::colorRGB(0, 0, 255)
-#define WHITE DIYables_TFT::colorRGB(255, 255, 255)
+static LGFX lcd;
+static LGFX_Sprite sprite;
+static LGFX_Sprite sp;
+static LGFX_Sprite triangle_right;
+static LGFX_Sprite triangle_left;
+static WiFiManager wifiMgr;
+static DateTime dateTime;
+static float center_x, center_y, radius;
 
-#define PIN_RST 27 // The ESP32 pin GPIO27 connected to the RST pin of the circular TFT display
-#define PIN_DC 25 // The ESP32 pin GPIO25 connected to the DC pin of the circular TFT display
-#define PIN_CS 26 // The ESP32 pin GPIO26 connected to the CS pin of the circular TFT display
-
-DIYables_TFT_GC9A01_Round TFT_display(PIN_RST, PIN_DC, PIN_CS);
-
-int angle = 0;
-int angles[] = {10, 50, 90, 130};
-
-void setChipSelect(uint8_t val) {
-    digitalWrite(PIN_RST, val);
+inline uint16_t getBackColor(int x, int y)
+{
+  return lcd.swap565(abs((x&31)-16)<<3, 0, abs((y&31)-16)<<3);
+//return lcd.swap565(x, 0, y);
 }
 
-// Open a raw SPI transaction — must be paired with spiEnd()
-void spiBegin() {
-    SPI.beginTransaction(SPISettings(40000000, MSBFIRST, SPI_MODE0));
-    setChipSelect(0);
+void setup(void)
+{
+  lcd.init();
+
+  // lcd dimensions:
+  log_i("main: LCD initialized - width=%d, height=%d", lcd.width(), lcd.height());
+
+  // Note: WiFi connection happens in loop to avoid blocking startup
+  // WiFi connection will retry automatically if not connected
+  log_i("main: Setup complete, WiFi connection will happen in loop");
+
+  sprite.setColorDepth(lcd.getColorDepth());
+  sprite.setFont(&fonts::Font8);
+  sprite.setTextColor(TFT_WHITE);
+  sprite.setTextDatum(textdatum_t::middle_center);
+  sprite.setCursor(0,0);
+  sprite.drawNumber(3, lcd.width(), 0);
+
+  lcd.startWrite();
+  radius = lcd.width() / 2;
+  center_x = radius;
+  center_y = radius;
 }
 
-// Close a raw SPI transaction — must be paired with spiBegin()
-void spiEnd() {
-    setChipSelect(1);
-    SPI.endTransaction();
-}
+void loop(void)
+{
+  static const float SPRITE_ZOOM = 3.0f;
+  // static const float SPRITE_ZOOM = 1.5f;
+  static const int SPRITE_WIDTH = 64;
+  static const int SPRITE_HEIGHT = 70;
+  static const int x_offsets[24] = {0, -10, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 1, 1, 1, 1};
+  static bool wifi_connected = false;
+  static unsigned long last_wifi_attempt = 0;
+  static bool first_attempt = true;
 
-// Raw command send — must be called within spiBegin()/spiEnd()
-void writeCommand(uint8_t cmd) {
-    digitalWrite(PIN_DC, 0);
-    SPI.transfer(cmd);
-    digitalWrite(PIN_DC, 1);
-}
-
-void setRotation(uint8_t r) {
-    //Adafruit_GFX::setRotation(r);
-    spiBegin();
-    writeCommand(0x36);   
-    SPI.transfer(r);  
-    spiEnd();
-
-}
-
-void display() {
-  // Sample temperature value
-  float temperature = 26.4;
-  float humidity = 64.7;
-  TFT_display.fillScreen(BLACK);
-
-  // Display temperature with degree symbol
-  TFT_display.setTextColor(RED);
-  TFT_display.setCursor(5, 100);  // Set cursor position (x, y)
-  TFT_display.print("Temperature: ");
-  TFT_display.print(temperature, 1);  // Print temperature with 1 decimal place
-  TFT_display.print(char(247));
-  TFT_display.println("C");
-
-  // Display humidity
-  TFT_display.setTextColor(BLUE);
-  TFT_display.setCursor(30, 140);  // Set cursor position (x, y)
-  TFT_display.print("Humidity: ");
-  TFT_display.print(humidity, 1);  // Print humidity with 1 decimal place
-  TFT_display.print("%");
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println(F("Arduino TFT LCD Display - show text and number"));
-
-  TFT_display.begin();
-
-  // Set the rotation (0 to 3)
-  TFT_display.setRotation(0);  // Rotate screen 90 degrees
-  TFT_display.setTextSize(2);  // Adjust text size as needed
-
-  display();
-}
-
-
-
-
-void loop(void) {
-  static unsigned long lastUpdate = 0;
-  unsigned long currentTime = millis();
-  
-  if (currentTime - lastUpdate >= 300) {
-    angle = (angle + 1)%4;
-    Serial.printf("angle: %d\n", angle);
-    TFT_display.setRotation(angle);
-    display();
-    lastUpdate = currentTime;
+  // Try WiFi connection immediately on first loop, then every 30 seconds
+  if (!wifi_connected && (first_attempt || (millis() - last_wifi_attempt) > 30000)) {
+    first_attempt = false;
+    last_wifi_attempt = millis();
+    log_i("main: Attempting WiFi connection...");
+    if (wifiMgr.connect()) {
+      wifi_connected = true;
+      // Sync time when WiFi connects
+      log_i("main: WiFi connected, syncing NTP time");
+      dateTime.syncNTPIfNeeded();
+    } else {
+      log_w("main: WiFi connection failed, will retry in 30 seconds");
+    }
   }
+
+
+  // Get current hour and minutes
+  uint8_t currentHour = dateTime.getHour();
+  uint8_t currentMinute = dateTime.getMinute();
+  
+  // Only refresh every 100ms
+  static unsigned long last_refresh_time = 0;
+  if (millis() - last_refresh_time < 100) {
+    return;  // Skip this loop iteration if less than 100ms have passed
+  }
+  last_refresh_time = millis();
+  
+  // Rotation angle reflects minutes and seconds: 6° per minute + 0.1° per second (360°/60min/60sec)
+  float rotation_angle = (currentMinute * 6.0f) ;
+  
+  // Create small sprite for the digit
+  sp.createSprite(SPRITE_WIDTH, SPRITE_HEIGHT);
+  sp.fillSprite(TFT_BLACK);
+  
+  // Calculate color fade: light blue to light red through rainbow in 30 seconds, then back
+  static unsigned long fade_start_time = 0;
+  if (fade_start_time == 0) {
+    fade_start_time = millis();
+  }
+  
+  unsigned long elapsed = (millis() - fade_start_time) % 30000;  // 30 second cycle
+  float fade_progress = elapsed / 15000.0f;  // 0-1 over 15 seconds
+  
+  // Clamp progress to 0-1 (first 15 sec goes 0->1, next 15 sec goes 1->0)
+  if (fade_progress > 1.0f) {
+    fade_progress = 2.0f - fade_progress;
+  }
+  
+  // Hue: start at 300° (purple), end at 0° (red)
+  float hue = 300.0f * (1.0f - fade_progress);  // 300 -> 0
+  
+  // HSV to RGB conversion with high saturation and brightness for light colors
+  float s = 1.0f;  // Full saturation
+  float v = 1.0f;  // Full brightness (255)
+  
+  float h_prime = hue / 60.0f;
+  int i = (int)h_prime;
+  float f = h_prime - i;
+  
+  float p = v * (1.0f - s);
+  float q = v * (1.0f - f * s);
+  float t_hsv = v * (1.0f - (1.0f - f) * s);
+  
+  float r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t_hsv; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t_hsv; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t_hsv; g = p; b = v; break;
+    default: r = v; g = p; b = q; break;
+  }
+  
+  uint16_t fade_color = lcd.color565((uint8_t)(r * 255), (uint8_t)(g * 255), (uint8_t)(b * 255));
+  
+  sp.setTextColor(fade_color);
+  
+  // Draw large digit with current hour centered on small sprite
+  sp.setFont(&fonts::Font7);
+  sp.setTextDatum(textdatum_t::middle_center);
+  sp.drawNumber(currentHour, SPRITE_WIDTH / 2 + x_offsets[currentHour], SPRITE_HEIGHT / 2);
+  
+  // Draw date at the bottom
+  sp.setFont(&fonts::Font0);
+  char date_str[10];
+  uint8_t currentDay = dateTime.getDay();
+  uint8_t currentMonth = dateTime.getMonth();
+  sprintf(date_str, "%d/%d", currentDay, currentMonth);
+  sp.drawString(date_str, SPRITE_WIDTH / 2, SPRITE_HEIGHT - 5);
+
+  // Draw sprite border
+  //sp.drawRect(0, 0, SPRITE_WIDTH, SPRITE_HEIGHT, TFT_WHITE);
+
+  // Draw minute indicator triangles, created once and reused to avoid flickering
+  if (triangle_right.getBuffer() == nullptr) {
+    triangle_right.createSprite(30, 60);
+    triangle_right.setColorDepth(lcd.getColorDepth());
+  }
+  if (triangle_left.getBuffer() == nullptr) {
+    triangle_left.createSprite(23, 60);
+    triangle_left.setColorDepth(lcd.getColorDepth());
+  }
+  
+  triangle_right.fillSprite(TFT_BLACK);
+  triangle_left.fillSprite(TFT_BLACK);
+  
+  float tip_x_right, tip_y_right, tip_x_left, tip_y_left;
+  
+  // Right triangle: display when minutes < 10
+  if (currentMinute < 10) {
+    triangle_right.fillTriangle(23, 30, 3, 10, 3, 50, fade_color);
+    triangle_right.setPivot(23, 30);
+  }
+  // Calculate right triangle tip position at screen border in the direction of rotation
+  float angle_rad_right = (-rotation_angle * M_PI) / 180.0f;
+  tip_x_right = center_x + radius * cos(angle_rad_right);
+  tip_y_right = center_y + radius * sin(angle_rad_right);
+  
+  // Left triangle: display when minutes >= 50
+  if (currentMinute >= 50) {
+    triangle_left.fillTriangle(0, 30, 23, 10, 23, 50, fade_color);
+    triangle_left.setPivot(0, 30);
+  }
+  // Calculate left triangle tip position at screen border opposite to rotation direction
+  float angle_rad_left = ((-rotation_angle + 180) * M_PI) / 180.0f;
+  tip_x_left = center_x + radius * cos(angle_rad_left);
+  tip_y_left = center_y + radius * sin(angle_rad_left);
+  
+  // Push both triangles rotated around screen center, no zoom
+  // TFT_BLACK as transparency color makes the background transparent
+  triangle_right.pushRotateZoomWithAA(&lcd, tip_x_right, tip_y_right, -rotation_angle, 1.0f, 1.0f, TFT_BLACK);
+  triangle_left.pushRotateZoomWithAA(&lcd, tip_x_left, tip_y_left, -rotation_angle, 1.0f, 1.0f, TFT_BLACK);
+  
+  // Set pivot p,oint at sprite center
+  sp.setPivot(SPRITE_WIDTH / 2, SPRITE_HEIGHT / 2);
+  
+  // Push rotated sprite to display with zoom, rotating around screen center
+  // TFT_BLACK as transparency color makes the background transparent
+  sp.pushRotateZoomWithAA(&lcd, center_x, center_y, -rotation_angle, SPRITE_ZOOM, SPRITE_ZOOM, TFT_BLACK);
+  sp.deleteSprite();
+
 }
