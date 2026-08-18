@@ -6,8 +6,11 @@
 static LGFX lcd;
 static LGFX_Sprite sprite;
 static LGFX_Sprite sp;
+static LGFX_Sprite triangle_right;
+static LGFX_Sprite triangle_left;
 static WiFiManager wifiMgr;
 static DateTime dateTime;
+static float center_x, center_y, radius;
 
 inline uint16_t getBackColor(int x, int y)
 {
@@ -34,13 +37,18 @@ void setup(void)
   sprite.drawNumber(3, lcd.width(), 0);
 
   lcd.startWrite();
+  radius = lcd.width() / 2;
+  center_x = radius;
+  center_y = radius;
 }
 
 void loop(void)
 {
   static const float SPRITE_ZOOM = 3.0f;
-  static const int SPRITE_SIDE = 120;
-  static const int x_offsets[24] = {0, -10, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 0, 0, 0, 0};
+  // static const float SPRITE_ZOOM = 1.5f;
+  static const int SPRITE_WIDTH = 64;
+  static const int SPRITE_HEIGHT = 70;
+  static const int x_offsets[24] = {0, -10, 0, 0, 0, 0, 0, 0, 0, 0, -10, -10, -10, -10, -10, -10, -10, -10, -10, -10, 1, 1, 1, 1};
   static bool wifi_connected = false;
   static unsigned long last_wifi_attempt = 0;
   static bool first_attempt = true;
@@ -60,8 +68,6 @@ void loop(void)
     }
   }
 
-  float center_x = lcd.width() / 2;
-  float center_y = lcd.height() / 2;
 
   // Get current hour and minutes
   uint8_t currentHour = dateTime.getHour();
@@ -78,7 +84,7 @@ void loop(void)
   float rotation_angle = (currentMinute * 6.0f) ;
   
   // Create small sprite for the digit
-  sp.createSprite(SPRITE_SIDE, SPRITE_SIDE);
+  sp.createSprite(SPRITE_WIDTH, SPRITE_HEIGHT);
   sp.fillSprite(TFT_BLACK);
   
   // Calculate color fade: light blue to light red through rainbow in 30 seconds, then back
@@ -108,15 +114,15 @@ void loop(void)
   
   float p = v * (1.0f - s);
   float q = v * (1.0f - f * s);
-  float t = v * (1.0f - (1.0f - f) * s);
+  float t_hsv = v * (1.0f - (1.0f - f) * s);
   
   float r, g, b;
   switch (i % 6) {
-    case 0: r = v; g = t; b = p; break;
+    case 0: r = v; g = t_hsv; b = p; break;
     case 1: r = q; g = v; b = p; break;
-    case 2: r = p; g = v; b = t; break;
+    case 2: r = p; g = v; b = t_hsv; break;
     case 3: r = p; g = q; b = v; break;
-    case 4: r = t; g = p; b = v; break;
+    case 4: r = t_hsv; g = p; b = v; break;
     default: r = v; g = p; b = q; break;
   }
   
@@ -127,7 +133,7 @@ void loop(void)
   // Draw large digit with current hour centered on small sprite
   sp.setFont(&fonts::Font7);
   sp.setTextDatum(textdatum_t::middle_center);
-  sp.drawNumber(currentHour, SPRITE_SIDE / 2 + x_offsets[currentHour], SPRITE_SIDE / 2);
+  sp.drawNumber(currentHour, SPRITE_WIDTH / 2 + x_offsets[currentHour], SPRITE_HEIGHT / 2);
   
   // Draw date at the bottom
   sp.setFont(&fonts::Font0);
@@ -135,13 +141,57 @@ void loop(void)
   uint8_t currentDay = dateTime.getDay();
   uint8_t currentMonth = dateTime.getMonth();
   sprintf(date_str, "%d/%d", currentDay, currentMonth);
-  sp.drawString(date_str, SPRITE_SIDE / 2, SPRITE_SIDE - 30);
+  sp.drawString(date_str, SPRITE_WIDTH / 2, SPRITE_HEIGHT - 5);
+
+  // Draw sprite border
+  //sp.drawRect(0, 0, SPRITE_WIDTH, SPRITE_HEIGHT, TFT_WHITE);
+
+  // Draw minute indicator triangles, created once and reused to avoid flickering
+  if (triangle_right.getBuffer() == nullptr) {
+    triangle_right.createSprite(30, 60);
+    triangle_right.setColorDepth(lcd.getColorDepth());
+  }
+  if (triangle_left.getBuffer() == nullptr) {
+    triangle_left.createSprite(23, 60);
+    triangle_left.setColorDepth(lcd.getColorDepth());
+  }
+  
+  triangle_right.fillSprite(TFT_BLACK);
+  triangle_left.fillSprite(TFT_BLACK);
+  
+  float tip_x_right, tip_y_right, tip_x_left, tip_y_left;
+  
+  // Right triangle: display when minutes < 10
+  if (currentMinute < 10) {
+    triangle_right.fillTriangle(23, 30, 3, 10, 3, 50, fade_color);
+    triangle_right.setPivot(23, 30);
+  }
+  // Calculate right triangle tip position at screen border in the direction of rotation
+  float angle_rad_right = (-rotation_angle * M_PI) / 180.0f;
+  tip_x_right = center_x + radius * cos(angle_rad_right);
+  tip_y_right = center_y + radius * sin(angle_rad_right);
+  
+  // Left triangle: display when minutes >= 50
+  if (currentMinute >= 50) {
+    triangle_left.fillTriangle(0, 30, 23, 10, 23, 50, fade_color);
+    triangle_left.setPivot(0, 30);
+  }
+  // Calculate left triangle tip position at screen border opposite to rotation direction
+  float angle_rad_left = ((-rotation_angle + 180) * M_PI) / 180.0f;
+  tip_x_left = center_x + radius * cos(angle_rad_left);
+  tip_y_left = center_y + radius * sin(angle_rad_left);
+  
+  // Push both triangles rotated around screen center, no zoom
+  // TFT_BLACK as transparency color makes the background transparent
+  triangle_right.pushRotateZoomWithAA(&lcd, tip_x_right, tip_y_right, -rotation_angle, 1.0f, 1.0f, TFT_BLACK);
+  triangle_left.pushRotateZoomWithAA(&lcd, tip_x_left, tip_y_left, -rotation_angle, 1.0f, 1.0f, TFT_BLACK);
   
   // Set pivot p,oint at sprite center
-  sp.setPivot(SPRITE_SIDE / 2, SPRITE_SIDE / 2);
+  sp.setPivot(SPRITE_WIDTH / 2, SPRITE_HEIGHT / 2);
   
   // Push rotated sprite to display with zoom, rotating around screen center
-  sp.pushRotateZoomWithAA(&lcd, center_x, center_y, -rotation_angle, SPRITE_ZOOM, SPRITE_ZOOM, 0);
+  // TFT_BLACK as transparency color makes the background transparent
+  sp.pushRotateZoomWithAA(&lcd, center_x, center_y, -rotation_angle, SPRITE_ZOOM, SPRITE_ZOOM, TFT_BLACK);
   sp.deleteSprite();
 
 }
